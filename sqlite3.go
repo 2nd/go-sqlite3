@@ -46,6 +46,62 @@ _sqlite3_bind_blob(sqlite3_stmt *stmt, int n, void *p, int np) {
 
 #include <stdio.h>
 #include <stdint.h>
+#include <sqlite3.h>
+
+typedef struct ByteCtx ByteCtx;
+struct ByteCtx {
+  char bytes[4266];
+  uint64_t cnt;
+};
+
+static void bytesSummer(sqlite3_context *context, int argc, sqlite3_value **argv){
+  ByteCtx *p;
+  int type;
+  p = sqlite3_aggregate_context(context, sizeof(*p));
+  type = sqlite3_value_type(argv[0]);
+  if(p && type!=SQLITE_NULL) {
+    p->cnt++;
+    char const *blob = sqlite3_value_blob(argv[0]);
+    int nBytes = sqlite3_value_bytes(argv[0]);
+    if ( blob ) {
+      char c1, c2;
+      short s1, s2, s3;
+      char* sum = p->bytes;
+      for(int i=0; i<nBytes; i+=2){
+        c1 = blob[i];
+        c2 = blob[i+1];
+        s1 = (short)(((unsigned char)c2 << 8) | (unsigned char)c1);
+        c1 = sum[i];
+        c2 = sum[i+1];
+        s2 = (short)(((unsigned char)c2 << 8) | (unsigned char)c1);
+        s3 = s1+s2;
+        c1 = s3;
+        c2 = s3 >> 8;
+        sum[i] = c1;
+        sum[i+1] = c2;
+      }
+    }
+  }
+}
+
+static void bytesFinalizer(sqlite3_context *context){
+  ByteCtx *p;
+  p = sqlite3_aggregate_context(context, 0);
+  sqlite3_result_blob(context, p->bytes, 4266, SQLITE_TRANSIENT);
+}
+
+
+static void
+_addFunc(sqlite3 *db){
+
+  int *ptr=NULL;
+  void *ptr2=NULL;
+  char *yFunctionName = "BYTESUM";
+  void (*yStep)(sqlite3_context*,int,sqlite3_value**) = bytesSummer;
+  void (*yFinal)(sqlite3_context*) = bytesFinalizer;
+
+  int val2 = sqlite3_create_function(db,yFunctionName,1,SQLITE_UTF16LE,ptr,ptr2,yStep,yFinal);
+}
 
 static int
 _sqlite3_exec(sqlite3* db, const char* pcmd, long* rowid, long* changes)
@@ -352,6 +408,7 @@ func (d *SQLiteDriver) Open(dsn string) (driver.Conn, error) {
 		return nil, Error{Code: ErrNo(rv)}
 	}
 
+	C._addFunc(db)
 	conn := &SQLiteConn{db: db, loc: loc, txlock: txlock}
 
 	if len(d.Extensions) > 0 {
